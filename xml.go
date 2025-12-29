@@ -48,7 +48,7 @@ type Attr struct {
 }
 
 // A Token is an interface holding one of the token types:
-// [StartElement], [EndElement], [CharData], [Comment], [ProcInst], or [Directive].
+// [StartElement], [EndElement], [EmptyElement], [CharData], [Comment], [ProcInst], or [Directive].
 type Token any
 
 // A StartElement represents an XML start element.
@@ -73,6 +73,22 @@ func (e StartElement) End() EndElement {
 // An EndElement represents an XML end element.
 type EndElement struct {
 	Name Name
+}
+
+// EmptyElement represents a self-closing element (i.e <my-element/>).  This
+// element type is only used during encoding and is never emitted while
+// decoding.
+type EmptyElement struct {
+	Name Name
+	Attr []Attr
+}
+
+// Copy creates a new copy of EmptyElement.
+func (e EmptyElement) Copy() EmptyElement {
+	attrs := make([]Attr, len(e.Attr))
+	copy(attrs, e.Attr)
+	e.Attr = attrs
+	return e
 }
 
 // A CharData represents XML character data (raw text),
@@ -121,6 +137,8 @@ func CopyToken(t Token) Token {
 	case ProcInst:
 		return v.Copy()
 	case StartElement:
+		return v.Copy()
+	case EmptyElement:
 		return v.Copy()
 	}
 	return t
@@ -496,8 +514,10 @@ func (d *Decoder) popElement(t *EndElement) bool {
 		if name.Space == "" {
 			ns = `""`
 		}
-		d.err = d.syntaxError("element <" + s.name.Local + "> in space " + s.name.Space +
-			" closed by </" + name.Local + "> in space " + ns)
+		d.err = d.syntaxError(
+			"element <" + s.name.Local + "> in space " + s.name.Space +
+				" closed by </" + name.Local + "> in space " + ns,
+		)
 		return false
 	}
 
@@ -678,7 +698,8 @@ func (d *Decoder) rawToken() (Token, error) {
 				if b0 == '-' && b1 == '-' {
 					if b != '>' {
 						d.err = d.syntaxError(
-							`invalid sequence "--" not allowed in comments`)
+							`invalid sequence "--" not allowed in comments`,
+						)
 						return nil, d.err
 					}
 					break

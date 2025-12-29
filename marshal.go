@@ -210,15 +210,18 @@ var (
 // EncodeToken allows writing a [ProcInst] with Target set to "xml" only as the first token
 // in the stream.
 func (enc *Encoder) EncodeToken(t Token) error {
-
 	p := &enc.p
 	switch t := t.(type) {
 	case StartElement:
-		if err := p.writeStart(&t); err != nil {
+		if err := p.writeStart(t.Name, t.Attr, false); err != nil {
 			return err
 		}
 	case EndElement:
 		if err := p.writeEnd(t.Name); err != nil {
+			return err
+		}
+	case EmptyElement:
+		if err := p.writeStart(t.Name, t.Attr, true); err != nil {
 			return err
 		}
 	case CharData:
@@ -467,7 +470,10 @@ func (p *printer) marshalValue(val reflect.Value, finfo *fieldInfo, startTemplat
 	if val.CanAddr() {
 		pv := val.Addr()
 		if pv.CanInterface() && pv.Type().Implements(textMarshalerType) {
-			return p.marshalTextInterface(pv.Interface().(encoding.TextMarshaler), defaultStart(pv.Type(), finfo, startTemplate))
+			return p.marshalTextInterface(
+				pv.Interface().(encoding.TextMarshaler),
+				defaultStart(pv.Type(), finfo, startTemplate),
+			)
 		}
 	}
 
@@ -551,7 +557,7 @@ func (p *printer) marshalValue(val reflect.Value, finfo *fieldInfo, startTemplat
 		len(p.tags) != 0 && p.tags[len(p.tags)-1].Space != "" {
 		start.Attr = append(start.Attr, Attr{Name{"", xmlnsPrefix}, ""})
 	}
-	if err := p.writeStart(&start); err != nil {
+	if err := p.writeStart(start.Name, start.Attr, false); err != nil {
 		return err
 	}
 
@@ -698,7 +704,11 @@ func (p *printer) marshalInterface(val Marshaler, start StartElement) error {
 
 	// Make sure MarshalXML closed all its tags. p.tags[n-1] is the mark.
 	if len(p.tags) > n {
-		return fmt.Errorf("xml: %s.MarshalXML wrote invalid XML: <%s> not closed", receiverType(val), p.tags[len(p.tags)-1].Local)
+		return fmt.Errorf(
+			"xml: %s.MarshalXML wrote invalid XML: <%s> not closed",
+			receiverType(val),
+			p.tags[len(p.tags)-1].Local,
+		)
 	}
 	p.tags = p.tags[:n-1]
 	return nil
@@ -706,7 +716,7 @@ func (p *printer) marshalInterface(val Marshaler, start StartElement) error {
 
 // marshalTextInterface marshals a TextMarshaler interface value.
 func (p *printer) marshalTextInterface(val encoding.TextMarshaler, start StartElement) error {
-	if err := p.writeStart(&start); err != nil {
+	if err := p.writeStart(start.Name, start.Attr, false); err != nil {
 		return err
 	}
 	text, err := val.MarshalText()
@@ -718,41 +728,51 @@ func (p *printer) marshalTextInterface(val encoding.TextMarshaler, start StartEl
 }
 
 // writeStart writes the given start element.
-func (p *printer) writeStart(start *StartElement) error {
-	if start.Name.Local == "" {
+func (p *printer) writeStart(name Name, attr []Attr, empty bool) error {
+	if name.Local == "" {
 		return fmt.Errorf("xml: start tag with no name")
 	}
 
-	p.tags = append(p.tags, start.Name)
+	if !empty {
+		p.tags = append(p.tags, name)
+	}
 	p.markPrefix()
 
 	p.writeIndent(1)
 	p.WriteByte('<')
-	p.WriteString(start.Name.Local)
+	p.WriteString(name.Local)
 
-	if start.Name.Space != "" {
+	if name.Space != "" {
 		p.WriteString(` xmlns="`)
-		p.EscapeString(start.Name.Space)
+		p.EscapeString(name.Space)
 		p.WriteByte('"')
 	}
 
 	// Attributes
-	for _, attr := range start.Attr {
-		name := attr.Name
-		if name.Local == "" {
+	for _, attr := range attr {
+		attrName := attr.Name
+		if attrName.Local == "" {
 			continue
 		}
 		p.WriteByte(' ')
-		if name.Space != "" {
-			p.WriteString(p.createAttrPrefix(name.Space))
+		if attrName.Space != "" {
+			p.WriteString(p.createAttrPrefix(attrName.Space))
 			p.WriteByte(':')
 		}
-		p.WriteString(name.Local)
+		p.WriteString(attrName.Local)
 		p.WriteString(`="`)
 		p.EscapeString(attr.Value)
 		p.WriteByte('"')
 	}
+
+	if empty {
+		p.WriteByte('/')
+	}
 	p.WriteByte('>')
+	if empty {
+		p.writeIndent(-1)
+		p.popPrefix()
+	}
 	return nil
 }
 
@@ -767,7 +787,13 @@ func (p *printer) writeEnd(name Name) error {
 		if top.Local != name.Local {
 			return fmt.Errorf("xml: end tag </%s> does not match start tag <%s>", name.Local, top.Local)
 		}
-		return fmt.Errorf("xml: end tag </%s> in namespace %s does not match start tag <%s> in namespace %s", name.Local, name.Space, top.Local, top.Space)
+		return fmt.Errorf(
+			"xml: end tag </%s> in namespace %s does not match start tag <%s> in namespace %s",
+			name.Local,
+			name.Space,
+			top.Local,
+			top.Space,
+		)
 	}
 	p.tags = p.tags[:len(p.tags)-1]
 
@@ -1100,7 +1126,7 @@ func (s *parentStack) trim(parents []string) error {
 // push adds parent elements to the stack and writes open tags.
 func (s *parentStack) push(parents []string) error {
 	for i := 0; i < len(parents); i++ {
-		if err := s.p.writeStart(&StartElement{Name: Name{Local: parents[i]}}); err != nil {
+		if err := s.p.writeStart(Name{Local: parents[i]}, nil, false); err != nil {
 			return err
 		}
 	}
