@@ -2589,3 +2589,82 @@ func TestClose(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyElement(t *testing.T) {
+	var b strings.Builder
+	enc := NewEncoder(&b)
+	enc.Indent("", "  ")
+	err := enc.EncodeToken(StartElement{
+		Name: Name{
+			Local: "bar",
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+	err = enc.EncodeToken(EmptyElement{
+		Name: Name{
+			Local: "foo",
+		},
+		Attr: nil,
+	})
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+	err = enc.EncodeToken(EmptyElement{
+		Name: Name{
+			Local: "baz",
+		},
+		Attr: nil,
+	})
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+	err = enc.EncodeToken(EndElement{
+		Name: Name{
+			Local: "bar",
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+	err = enc.Flush()
+	if err != nil {
+		t.Fatalf("flush error: %v", err)
+	}
+	expected := strings.TrimSpace(`
+<bar>
+  <foo/>
+  <baz/>
+</bar>`)
+	if b.String() != expected {
+		t.Errorf("\ngot  %q\nwant %q", b.String(), expected)
+	}
+}
+
+func TestEmptyWithAttrs(t *testing.T) {
+	var b strings.Builder
+	enc := NewEncoder(&b)
+	enc.Indent("", "  ")
+	start := EmptyElement{
+		Name: Name{Local: "foo"},
+		Attr: []Attr{
+			{Name: Name{Local: "xmlns:foo"}, Value: "https://example.com"},
+			{Name: Name{Local: "bar"}, Value: "1"},
+			{Name: Name{Local: "foo:baz"}, Value: "2"},
+		},
+	}
+	err := enc.EncodeToken(start)
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+
+	err = enc.Flush()
+	if err != nil {
+		t.Fatalf("flush error: %v", err)
+	}
+	expected := `<foo xmlns:foo="https://example.com" bar="1" foo:baz="2"/>`
+	if b.String() != expected {
+		t.Errorf("\ngot  %q\nwant %q", b.String(), expected)
+	}
+}
